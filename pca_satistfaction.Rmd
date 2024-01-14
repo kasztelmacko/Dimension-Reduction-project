@@ -1,0 +1,277 @@
+---
+title: "Employee Satisfaction Dimension Reduction Project"
+author: "Maciej Kasztelanic"
+date: "Winter Semester 2023/2024 UL"
+output: html_document
+---
+
+## Dimension Reduction in Analysis of Employee Satisfaction based on a survey
+
+## Data aquicition 
+The data set used in this aricle is a comprehensive collection of information regarding employees within a company.The dataset includes various details such as employee identification numbers, self-reported satisfaction levels, performance evaluations, project involvement, work hours, tenure with the company, work accidents, promotions received in the last 5 years, departmental affiliations, and salary levels[^1].
+
+## Methods
+In an article, two methods are used - Principal Component Analysis (PCA) and Multiple Correspondence Analysis (MCA) mixed with PCA. PCA is a widely used method for dimensionality reduction, which can help reduce the dimension of data without losing much information. It works by creating new variables, called principal components, that are linear combinations of the original variables. These components are orthogonal and capture the maximum variance in the data. MCA, on the other hand, is a method used for analyzing categorical data. It can be used to identify patterns and relationships between categorical variables. When combined with PCA, MCA can help analyze mixed data sets that contain both continuous and categorical variables. This can be particularly useful in social science research, where data sets often contain a mix of both types of variables
+
+### Data preprocessing
+Lets firstly load all needed packages
+````{r}
+library(pacman)
+p_load(factoextra,psych,ClusterR,flexclust,ggthemes,dplyr,
+       smacof,ggplot2,Rtsne,psy,scales,kableExtra,
+       scales,corrplot,pdp,reshape2,gridExtra,FactoMineR,Hmisc,cluster)
+```
+
+Then read the data set and change it to Data Frame
+```{r}
+data <- read.csv('Employee Attrition.csv')
+data<- select(data, -Emp.ID)
+data <- data.frame(data)
+```
+
+Check the dimensions of the data:
+```{r}
+cat("Number of observations in the dataset:", nrow(data))
+cat("Number of years variables in the analysis:", ncol(data))
+```
+```{r}
+data<-na.omit(data)
+cat("Number of observations in the dataset:", nrow(data))
+cat("Number of years variables in the analysis:", ncol(data))
+```
+
+Change column name for better understanding:
+```{r}
+colnames(data)[colnames(data) == "dept"] <- "department"
+```
+
+The variables correspond to:
+
+- satisfaction_leve: Employee's self-reported job satisfaction level
+- last_evaluation: Employee's most recent performance evaluation score
+- number_project: Number of projects the employee is currently working on
+- average_monthly_hours: Average number of hours worked per month by the employee
+- time_spend_company: Number of years the employee has spent with the company
+- Work_accident: Indicates whether the employee has experienced a work accident (1 for yes, 0 for no)
+- promotion_last_5years: Indicates whether the employee has received a promotion in the last 5 years (1 for yes, 0 for no)
+- department: The department or division in which the employee works
+- salary: Employee's salary level
+
+As in my dataset there are categorical variables I will change them into numeric
+```{r}
+print(unique(data$department))
+data <- data[data$department != 'RandD' & data$department != '', ]
+department_mapping <- c("sales" = 0, "accounting" = 1, "hr" = 2, "technical" = 3, "support" = 4, "management" = 5, "IT" = 6, "product_mng" = 7, "marketing" = 8)
+data$department <- as.numeric(factor(data$department, levels = names(department_mapping), labels = department_mapping))
+
+print(unique(data$salary))
+salary_mapping <- c("low" = 0, "medium" = 1, "high" = 2)
+data$salary <- as.numeric(factor(data$salary, levels = names(salary_mapping), labels = salary_mapping))
+```
+
+In order to better understand the data let's plot it to check for distribution:
+```{r}
+gg_hist_list <- lapply(names(data), function(column_name) {
+  ggplot(data, aes(x = .data[[column_name]])) +
+    geom_histogram(bins = 30, fill = "darkslategray4", color = "black") +
+    labs(title = column_name, x = column_name, y = "Frequency")
+})
+grid.arrange(grobs = gg_hist_list, ncol = 3)
+```
+
+And summarize it:
+```{r}
+summary(data)
+```
+
+As we can see most of the employees are rather satisfied with their work, where the most frequent satisfaction level is around 0.75, and median value is at 0.64. The majority of employees get paid low salary, and work in sales department. 
+The working hours in the company are high, with average over 200, but the most frequent being 145. It can be related to the number of projects employees take part in, as the data is close to normal distribution, with left skewness. 
+
+## Performing PCA analysis
+To understand if our data can be used to perform PCA testing I will conduct a Kaiser-Meyer-Olkin test and Bartlett’s test.
+
+- Kaiser-Meyer-Olkin: statistical measure used to determine the sampling adequacy of data for factor analysis. It measures the proportion of variance among variables that might be common and indicates to what extent an indicator is suitable for factor analysis. The KMO criterion is calculated and returns values between 0 and 1, with values closer to 1 suggesting that the variables are correlated and the data is more suited to factor analysis. The KMO test is commonly used in social science research to evaluate the suitability of data for factor analysis.Kaiser put the following values on the results: 0.00 to 0.49 unacceptable, 0.50 to 0.59 miserable, 0.60 to 0.69 mediocre, 0.70 to 0.79 middling, 0.80 to 0.89 meritorious, and 0.90 to 1.00 marvelous[^2].
+- Bartlett’s test: statistical test used to assess the equality of variance in different samples. It is used to test the null hypothesis that all k population variances are equal against the alternative that at least two are different[^3]
+
+```{r}
+data <- scale(data)
+data_matrix<-data.matrix(data, rownames.force = NA)
+dMatrix<- cor(data_matrix)
+
+KMO(dMatrix)
+```
+
+As KMO test`s result is above 0.6 we can continue with the analysis. Altough the result is mediocre the bartlett test support futher analysis.
+
+```{r}
+cortest.bartlett(dMatrix, n = nrow(data))
+```
+
+The output shows that the test statistic is highly significant (7722.347), and the p-value is 0, which indicates that the variances between the samples are not equal. This result supports the alternative hypothesis that at least two samples have different variances
+
+
+To understand better relationships between variables let's also create a correlation plot
+
+```{r}
+corrplot.mixed(dMatrix, tl.pos = 'lt', lower.col=c("indianred", "darkslategray4"), upper.col=c("indianred", "darkslategray4"), tl.cex = 0.5)
+```
+
+We can clearly see that number of projects are positively correlated with hours spend in a month, influencing negatively the satisfaction levels.
+
+
+Finally we can perform a PCA analysis:
+```{r}
+pca_data <- prcomp(data, center = TRUE, scale = TRUE)
+eigen(dMatrix)$values
+summary(pca_data)
+```
+In order to explain 78% of variance we can reduce the number of dimensions to 6
+
+### Number of components
+The idea behind Kaiser's Stopping Rule is that factors with eigenvalues greater than 1.0 explain more variance than a single variable and are therefore worth retaining. Factors with eigenvalues less than 1.0 are considered to be less important and can be dropped. The rule is based on the assumption that the factors are uncorrelated, which is often not the case in practice[^4].
+
+```{r}
+fviz_eig(pca_data, choice = "eigenvalue", ncp = ncol(data), barfill = "darkslategray4", barcolor = "darkslategray4", linecolor = "indianred",  addlabels = TRUE,   main = "Eigenvalues")
+```
+
+Based on this rule we can chose 3 components, as their eigenvalues are above 1.
+
+And then create a Scree plot explaining how much each dimension explains the variances.
+```{r}
+fviz_screeplot(pca_data, addlabels = TRUE, barfill = "darkslategray4", barcolor = "darkslategray4", linecolor = "indianred")
+```
+
+Where for 3 diemnsions we will explain 45,7%.
+
+To Visualize the variables better lets's also create another variance plot
+```{r}
+fviz_pca_var(pca_data, col.var ='darkslategray4')
+```
+
+contribution of variables to dimensions refers to the extent to which each variable contributes to the variability explained by the principal components.
+It can be calculated as:
+
+$$
+Contribution = \frac{VAR_{variable} * VAR_{principal.component}}{Total Variance}
+$$
+
+
+```{r}
+pca_var <- get_pca_var(pca_data)
+PC1 <- fviz_contrib(pca_data, choice = "var", axes = 1,fill = "darkslategray4",color = "darkslategray4")
+PC2 <- fviz_contrib(pca_data, choice = "var", axes = 2,fill = "darkslategray4",color = "darkslategray4")
+PC3 <- fviz_contrib(pca_data, choice = "var", axes = 3,fill = "darkslategray4",color = "darkslategray4")
+grid.arrange(PC1, PC2, PC3, ncol=2)
+```
+
+In above graphs we can see which variables contribute the most to each principal component. All the dimension are explained by different variables.
+
+
+Lastly we can perform PCA for each individual point, where for each data point we can assume the quality is being measured by its distance from the center - coordinates x=0, y=0
+```{r}
+fviz_pca_ind(pca_data, col.ind="cos2", geom = "point", gradient.cols = c("darkslategray4", "khaki1", "indianred" ))
+```
+
+## Perform PCA mixed with MCA
+
+For Multiple Correspondence Analysis (MCA) mixed with Principal Component Analysis (PCA) we first need to divide variables into groups: categorical and numeric
+```{r}
+cat_data <- select(read.csv('Employee Attrition.csv'), dept, salary)
+num_data <- select(read.csv('Employee Attrition.csv'), -dept, -salary, -Emp.ID)
+num_data<-na.omit(num_data)
+cat_data<-na.omit(cat_data)
+cat_data <- cat_data[cat_data$dept != '', ]
+```
+
+```{r}
+cat("Number of observations in the categorical dataset:", nrow(cat_data))
+cat(" Number of years variables in the analysis:", ncol(cat_data))
+
+cat(" Number of observations in the numeric dataset:", nrow(num_data))
+cat(" Number of years variables in the analysis:", ncol(num_data))
+```
+Both data set have now same number of observations and each stores same type of variables.
+
+Lets check wheather if the reduced numeric set qualify for the analysis:
+```{r}
+data.scale <- as.data.frame(lapply(num_data, scale))
+num_data <- scale(num_data)
+data_matrix_2<-data.matrix(num_data, rownames.force = NA)
+dMatrix_2<- cor(data_matrix_2)
+KMO(dMatrix_2)
+```
+
+```{r}
+cortest.bartlett(dMatrix_2, n = nrow(num_data))
+```
+And simillarly to the only PCA part, both tests are passed with KMO being mediocre.
+
+
+By creating Scree plot for categorical data we will understand how the dimensions explain the variances in MCA
+```{r}
+mca1 <- MCA(cat_data, ncp = 2, graph = FALSE)
+fviz_screeplot(mca1, addlabels = TRUE, barfill = "darkslategray4", barcolor = "darkslategray4", linecolor = "indianred")
+```
+
+```{r}
+fviz_contrib(mca1, choice = "var", axes = 1:2, fill = "darkslategray4", color = "darkslategray4")
+```
+
+The contribution plot for 2 dimensions shows that the combination of variables department and salary are explaining the most in this two dimensional separation
+
+Now I can perform a PCA for the numeric variables:
+```{r}
+pca2 <- prcomp(num_data, center = TRUE, scale = TRUE)
+eigen(dMatrix_2)$values
+```
+```{r}
+fviz_eig(pca2, choice = "eigenvalue", ncp = ncol(num_data), barfill = "darkslategray4", barcolor = "darkslategray4", linecolor = "indianred",  addlabels = TRUE,   main = "Eigenvalues")
+
+```
+
+The Kaiser rule is again preserved where eigenvalues are higher than 1 so for 3 dimensions
+
+By plotting the variable distribution we will be able to see contribution of each varaible.
+```{r}
+fviz_pca_var(pca2, col.var = "darkslategray4")
+```
+
+And at the very end we can check the contributions of each variable to the Dimensions:
+```{r}
+fviz_contrib(pca2, choice = "var", axes = 1:3, fill = "darkslategray4", color = "darkslategray4")
+```
+```{r}
+pca_var <- get_pca_var(pca2)
+PC4 <- fviz_contrib(pca2, choice = "var", axes = 1,fill = "darkslategray4",color = "darkslategray4")
+PC5 <- fviz_contrib(pca2, choice = "var", axes = 2,fill = "darkslategray4",color = "darkslategray4")
+PC6 <- fviz_contrib(pca2, choice = "var", axes = 3,fill = "darkslategray4",color = "darkslategray4")
+grid.arrange(PC4, PC5, PC6, ncol=2)
+```
+
+
+Where the highest contributions are acheived by satisfaction_level, number_project, promotion_last_5years and last_evaluation.
+
+Lastly we can perform hierarchical clustering on the numeric data:
+```{r}
+transp <- t(data.scale)
+dist_matrix <- dist(transp)
+hc<-hclust(dist_matrix, method="complete") 
+plot(hc, hang = -1)
+rect.hclust(hc, k = 3, border='indianred')
+```
+```{r}
+sub_grp<-cutree(hc, k=3) 
+fviz_cluster(list(data = dist_matrix, cluster = sub_grp), palette=c("darkslategray4", "indianred", "khaki1" ))
+```
+
+With hierarchical clustering we get slightly different results, where only in dimension 1 (Dim1) all Principal components are clustered together. For rest of clusters the main components are correct, but they not all match the PCA analysis exactly. The main reason why it may be the issue is mediocracy of the data used (as shown in previous tests) so the PCA does not capture all the underlying structure of the data.
+
+## Conculsion
+The goal of the research was to find out if the Employee satisfaction data set can be explained by lower number of dimensions remaining most information from the starting data. The percentages of explained variances in both PCA and PCA mixed with MCA were not high enough for the proposed number of dimensions to assume that all the points have been correctly allocated, but the outcomes seem to be relatively sensible in both scenarios. What is essential to understand is that the data might be highly influenced by some variables that dominate the dataset such as most of the employees work is sales, or earn "low" level of income. Study shows, that based on this data it is possible to represent major part of the satisfaction of the employees with lower number of variables. The key findings were that each dimension is explained by different variables but the explanations are only around 50%. Survey data can be efficiently condensed by categorizing variables (questions) into broader groups and, in certain instances, reducing the number of options to binary choices. What was also shown is that the quality of data used and its right usage is important in consideration of the final results.
+
+
+
+[^1]: https://www.kaggle.com/datasets/redpen12/employees-satisfaction-analysis?select=Employee+Attrition.csv
+[^2]: https://bookdown.org/luguben/EFA_in_R/kaiser-meyer-olkin-kmo.html
+[^3]: https://en.wikipedia.org/wiki/Bartlett%27s_test
+[^4]: https://hosted.jalt.org/test/bro_30.htm
